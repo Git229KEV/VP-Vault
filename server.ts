@@ -23,42 +23,58 @@ async function startServer() {
     try {
       const { data: html } = await axios.get(url, {
         headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
           "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
           "Accept-Language": "en-US,en;q=0.9",
-          "Cache-Control": "no-cache",
-          "Pragma": "no-cache",
+          "Upgrade-Insecure-Requests": "1",
+          "Referer": "https://www.google.com/",
         },
-        timeout: 8000,
+        timeout: 10000,
       });
 
       const $ = cheerio.load(html);
 
-      // Extract Title
-      const title =
+      // Extract Title with wider range of sources
+      let title =
         $('meta[property="og:title"]').attr("content") ||
         $('meta[name="twitter:title"]').attr("content") ||
-        $('meta[property="og:site_name"]').attr("content") ||
+        $('meta[itemprop="name"]').attr("content") ||
+        $('h1').first().text().trim() ||
         $("title").text() ||
         url;
 
-      // Extract Image (Thumbnail)
+      // Clean up title (remove common site suffixes)
+      title = title.replace(/\s*[|\-]\s*.*$/, '').trim();
+
+      // Extract Image (Thumbnail) - Comprehensive list of video metadata tags
       let image =
         $('meta[property="og:image:secure_url"]').attr("content") ||
         $('meta[property="og:image"]').attr("content") ||
         $('meta[name="twitter:image"]').attr("content") ||
         $('meta[property="og:video:thumbnail"]').attr("content") ||
+        $('meta[itemprop="thumbnailUrl"]').attr("content") ||
         $('meta[name="thumbnail"]').attr("content") ||
-        $('link[rel="image_src"]').attr("href");
+        $('link[rel="image_src"]').attr("href") ||
+        $('meta[property="og:image:url"]').attr("content");
 
-      // If no OG image, try to find a large enough image in the body
+      // Heuristic fallback for video sites that don't follow OG standards well
       if (!image) {
+        // Try to find a "poster" attribute in video tags
+        image = $('video').attr('poster');
+      }
+
+      if (!image) {
+        // Look for any image with "thumb", "poster", or "large" in the filename
         const potentialImages: string[] = [];
         $("img").each((_, el) => {
-          const src = $(el).attr("src");
+          const src = $(el).attr("src") || $(el).attr('data-src');
           if (src && (src.startsWith("http") || src.startsWith("//"))) {
-            potentialImages.push(src.startsWith("//") ? `https:${src}` : src);
+            const absoluteSrc = src.startsWith("//") ? `https:${src}` : src;
+            if (/thumb|poster|large|cover|preview/i.test(absoluteSrc)) {
+              potentialImages.unshift(absoluteSrc); // Prioritize these
+            } else {
+              potentialImages.push(absoluteSrc);
+            }
           }
         });
         image = potentialImages[0] || "";
