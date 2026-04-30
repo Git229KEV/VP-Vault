@@ -23,30 +23,32 @@ async function startServer() {
     try {
       const { data: html } = await axios.get(url, {
         headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
           "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-          "Accept-Language": "en-US,en;q=0.9",
-          "Upgrade-Insecure-Requests": "1",
+          "Accept-Language": "en-US,en;q=0.9,hi;q=0.8",
           "Referer": "https://www.google.com/",
+          "Sec-Fetch-Dest": "document",
+          "Sec-Fetch-Mode": "navigate",
+          "Sec-Fetch-Site": "cross-site",
+          "Upgrade-Insecure-Requests": "1",
         },
-        timeout: 10000,
+        timeout: 12000,
+        maxRedirects: 5,
+        validateStatus: (status) => status < 400, // Treat redirects as okay
       });
 
       const $ = cheerio.load(html);
 
-      // Extract Title with wider range of sources
+      // 1. Initial attempt at Title
       let title =
         $('meta[property="og:title"]').attr("content") ||
         $('meta[name="twitter:title"]').attr("content") ||
         $('meta[itemprop="name"]').attr("content") ||
         $('h1').first().text().trim() ||
         $("title").text() ||
-        url;
+        "";
 
-      // Clean up title (remove common site suffixes)
-      title = title.replace(/\s*[|\-]\s*.*$/, '').trim();
-
-      // Extract Image (Thumbnail) - Comprehensive list of video metadata tags
+      // 2. Initial attempt at Image
       let image =
         $('meta[property="og:image:secure_url"]').attr("content") ||
         $('meta[property="og:image"]').attr("content") ||
@@ -55,29 +57,51 @@ async function startServer() {
         $('meta[itemprop="thumbnailUrl"]').attr("content") ||
         $('meta[name="thumbnail"]').attr("content") ||
         $('link[rel="image_src"]').attr("href") ||
-        $('meta[property="og:image:url"]').attr("content");
+        "";
 
-      // Heuristic fallback for video sites that don't follow OG standards well
+      // 3. JSON-LD Fallback (Deep Scraping)
+      try {
+        const jsonLdScripts = $('script[type="application/ld+json"]');
+        jsonLdScripts.each((_, script) => {
+          try {
+            const content = JSON.parse($(script).html() || "{}");
+            const data = Array.isArray(content) ? content[0] : content;
+            
+            if (!title) title = data.name || data.headline;
+            if (!image) {
+              if (typeof data.image === 'string') image = data.image;
+              else if (data.image && data.image.url) image = data.image.url;
+              else if (data.thumbnailUrl) image = data.thumbnailUrl;
+            }
+          } catch (e) {}
+        });
+      } catch (e) {}
+
+      // Final clean up for title
+      if (!title || title === url) {
+         title = url.split('/').pop()?.split('?')[0].replace(/-/g, ' ') || url;
+      }
+      title = title.replace(/\s*[|\-]\s*.*$/, '').trim();
+
+      // Heuristic fallback for images
       if (!image) {
-        // Try to find a "poster" attribute in video tags
         image = $('video').attr('poster');
       }
 
       if (!image) {
-        // Look for any image with "thumb", "poster", or "large" in the filename
-        const potentialImages: string[] = [];
+        const images: string[] = [];
         $("img").each((_, el) => {
-          const src = $(el).attr("src") || $(el).attr('data-src');
+          const src = $(el).attr("src") || $(el).attr('data-src') || $(el).attr('srcset')?.split(' ')[0];
           if (src && (src.startsWith("http") || src.startsWith("//"))) {
             const absoluteSrc = src.startsWith("//") ? `https:${src}` : src;
-            if (/thumb|poster|large|cover|preview/i.test(absoluteSrc)) {
-              potentialImages.unshift(absoluteSrc); // Prioritize these
+            if (absoluteSrc.includes('thumb') || absoluteSrc.includes('poster') || absoluteSrc.includes('large')) {
+               images.unshift(absoluteSrc);
             } else {
-              potentialImages.push(absoluteSrc);
+               images.push(absoluteSrc);
             }
           }
         });
-        image = potentialImages[0] || "";
+        image = images[0] || "";
       }
 
       // Ensure relative paths are handled
