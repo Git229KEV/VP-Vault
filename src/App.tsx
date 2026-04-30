@@ -73,6 +73,11 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: newUrl }),
       });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
       const metadata = await response.json();
 
       const newLink: StoredLink = {
@@ -90,7 +95,19 @@ export default function App() {
       setIsAddModalOpen(false);
     } catch (error) {
       console.error("Failed to add link:", error);
-      alert("Failed to fetch link details. Please check the URL.");
+      // Fallback manually if even the API call failed completely
+      const fallbackLink: StoredLink = {
+        id: crypto.randomUUID(),
+        url: newUrl,
+        title: newUrl,
+        image: `https://images.unsplash.com/photo-1485846234645-a62644f84728?auto=format&fit=crop&q=80&w=600&h=400`,
+        category: newCategory.trim() || 'Uncategorized',
+        createdAt: Date.now(),
+      };
+      setLinks(prev => [fallbackLink, ...prev]);
+      setNewUrl('');
+      setNewCategory('');
+      setIsAddModalOpen(false);
     } finally {
       setIsScraping(false);
     }
